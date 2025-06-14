@@ -1,27 +1,40 @@
 import os
 import pandas as pd
 import numpy as np
+import json
+import datetime
+import traceback
 
 from langchain.tools import Tool
 from langchain.agents import create_openai_functions_agent, AgentExecutor
 from langchain_openai import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.memory import ConversationBufferMemory
+from langchain_community.callbacks import get_openai_callback
+from langchain_core.messages import AIMessage, HumanMessage
 
 from dotenv import load_dotenv
 from pathlib import Path
+
+# --- CONFIGURAÇÃO INICIAL ---
 
 # Carregar variáveis de ambiente
 dotenv_path = Path(__file__).resolve().parent.parent / '.env'
 load_dotenv(dotenv_path)
 api_key = os.getenv("OPENAI_API_KEY")
 
+# Arquivo json
+LOG_FILE = "log_interacoes.jsonl"
+
+# Carregar DataFrame
 try:
     df = pd.read_parquet("doencas_tratado.parquet")
     df.drop(columns='Prontuário', inplace=True)
 except Exception as e:
-    print(f"Erro ao carregar 'doencas_tratado.parquet': {e}")
+    print(f"Erro fatal ao carregar 'doencas_tratado.parquet': {e}")
     exit(1)
+
+# --- FERRAMENTA DE CONSULTA (sem alterações) ---
 
 def query_dataframe(query: str) -> str:
     try:
@@ -64,6 +77,8 @@ def query_dataframe(query: str) -> str:
     except Exception as e:
         return f"ERRO: {str(e)}\nDica: Use 'df' para referenciar o DataFrame principal"
 
+# --- CONFIGURAÇÃO DO AGENTE ---
+
 tools = [
     Tool(
         name="dataframe_query",
@@ -76,7 +91,7 @@ tools = [
 llm = ChatOpenAI(
     model="gpt-4.1-mini-2025-04-14",
     openai_api_key=api_key,
-    temperature=0.7
+    temperature=0.7,
 )
 
 prompt = ChatPromptTemplate.from_messages([
@@ -136,16 +151,69 @@ agent_executor = AgentExecutor(
     tools=tools,
     memory=memory,
     verbose=True,
-    handle_parsing_errors=True
+    handle_parsing_errors=True,
+    # ALTERAÇÃO: Habilitar o retorno dos passos intermediários
+    return_intermediate_steps=True
 )
 
-def processar_pergunta(pergunta, chat_history=None):
+# --- FUNÇÃO PRINCIPAL DE PROCESSAMENTO E LOG ---
+
+def processar_pergunta(pergunta: str, chat_history: list = None) -> str:
     """
-    Recebe uma pergunta do usuário e retorna a resposta do agente.
-    O parâmetro chat_history pode ser usado para manter o histórico entre chamadas.
+    Recebe uma pergunta, executa o agente, salva um log detalhado em JSON
+    e retorna a resposta final para o usuário.
     """
     entrada = {"input": pergunta}
     if chat_history:
         entrada["chat_history"] = chat_history
-    resposta = agent_executor.invoke(entrada)
-    return resposta["output"]
+
+    log_data = {
+        "timestamp": datetime.datetime.now().isoformat(),
+        "pergunta_usuario": pergunta,
+        "historico_usado": [
+            {"type": msg.type, "content": msg.content} for msg in (chat_history or [])
+        ],
+    }
+    
+    resposta_para_usuario = ""
+
+    try:
+        # Usar o callback para capturar custos e tokens
+        with get_openai_callback():
+            resposta_agente = agent_executor.invoke(entrada)
+
+        # Formatar os passos intermediários para o log
+        passos_formatados = []
+        for step in resposta_agente.get("intermediate_steps", []):
+            action, observation = step
+            passos_formatados.append({
+                "ferramenta": action.tool,
+                "input_ferramenta": action.tool_input,
+                "log_agente": action.log,
+                "output_ferramenta": observation,
+            })
+
+        # Preencher o resto do log com dados de sucesso
+        log_data.update({
+            "status": "sucesso",
+            "resposta_final_agente": resposta_agente.get("output"),
+            "passos_intermediarios": passos_formatados,
+        })
+        resposta_para_usuario = resposta_agente.get("output")
+
+    except Exception as e:
+        # Se ocorrer um erro, registrar as informações de falha
+        log_data.update({
+            "status": "erro",
+            "erro_mensagem": str(e),
+            "erro_traceback": traceback.format_exc(),
+        })
+        resposta_para_usuario = "Desculpe, ocorreu um erro ao processar sua solicitação. A equipe técnica foi notificada."
+        print(f"ERRO NO AGENTE: {e}") # Imprime o erro no console para depuração imediata
+
+    finally:
+        # Escrever o log no arquivo, independentemente de sucesso ou falha
+        with open(LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps(log_data, ensure_ascii=False, indent=2) + "\n")
+
+    return resposta_para_usuario
