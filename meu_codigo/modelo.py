@@ -17,7 +17,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from dotenv import load_dotenv
 from pathlib import Path
 
-api_key = st.secrets["OPENAI_API_KEY"]
+#api_key = st.secrets["OPENAI_API_KEY"]
 
 # --- CONFIGURAÇÃO INICIAL ---
 
