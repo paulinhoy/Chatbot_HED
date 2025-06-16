@@ -4,6 +4,7 @@ import numpy as np
 import json
 import datetime
 import traceback
+import streamlit as st
 
 from langchain.tools import Tool
 from langchain.agents import create_openai_functions_agent, AgentExecutor
@@ -16,12 +17,14 @@ from langchain_core.messages import AIMessage, HumanMessage
 from dotenv import load_dotenv
 from pathlib import Path
 
+api_key = st.secrets["OPENAI_API_KEY"]
+
 # --- CONFIGURAÇÃO INICIAL ---
 
 # Carregar variáveis de ambiente
-dotenv_path = Path(__file__).resolve().parent.parent / '.env'
-load_dotenv(dotenv_path)
-api_key = os.getenv("OPENAI_API_KEY")
+#dotenv_path = Path(__file__).resolve().parent.parent / '.env'
+#load_dotenv(dotenv_path)
+#api_key = os.getenv("OPENAI_API_KEY")
 
 # Arquivo json
 LOG_FILE = "log_interacoes.jsonl"
@@ -178,7 +181,7 @@ def processar_pergunta(pergunta: str, chat_history: list = None) -> str:
     resposta_para_usuario = ""
 
     try:
-        # Usar o callback para capturar custos e tokens
+        # Usar o callback para capturar custos e tokens 
         with get_openai_callback():
             resposta_agente = agent_executor.invoke(entrada)
 
@@ -208,11 +211,11 @@ def processar_pergunta(pergunta: str, chat_history: list = None) -> str:
             "erro_mensagem": str(e),
             "erro_traceback": traceback.format_exc(),
         })
-        resposta_para_usuario = "Desculpe, ocorreu um erro ao processar sua solicitação. A equipe técnica foi notificada."
-        print(f"ERRO NO AGENTE: {e}") # Imprime o erro no console para depuração imediata
+        resposta_para_usuario = "Ocorreu um erro ao processar sua solicitação."
+        print(f"ERRO NO AGENTE: {e}") 
 
     finally:
-        # Escrever o log no arquivo, independentemente de sucesso ou falha
+        # Escrever o log 
         with open(LOG_FILE, "a", encoding="utf-8") as f:
             f.write(json.dumps(log_data, ensure_ascii=False, indent=2) + "\n")
 
